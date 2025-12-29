@@ -1,0 +1,8 @@
+# .github/CODEOWNERS
+
+# 1. 기본 담당자 (Fallback)
+* @Namsoo315
+
+# 2. 구체적인 도메인 담당자
+# user 도메인 담당자
+#/monew/src/main/java/com/spring/monew/user/   @kimyumin03 예시
