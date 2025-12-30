@@ -5,12 +5,12 @@ services:
   # 📌 PostgreSQL
   # =========================
   postgres:
-    image: postgres:15
+    image: postgres:17
     container_name: postgres
     environment:
-      POSTGRES_DB: app
-      POSTGRES_USER: appuser
-      POSTGRES_PASSWORD: apppass
+      POSTGRES_DB: closet
+      POSTGRES_USER: closet-user
+      POSTGRES_PASSWORD: closet_1234
     volumes:
       - postgres-data:/var/lib/postgresql/data
     ports:
