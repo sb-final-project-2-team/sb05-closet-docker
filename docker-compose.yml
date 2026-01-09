@@ -63,6 +63,67 @@ services:
     networks:
       - app-net
 
+  # =========================
+  # 📌 API 서버 (Spring Boot 8080)
+  # =========================
+#  api:
+#    build: service/sb05-closet-api/closet
+#    container_name: closet-api
+#    depends_on:
+#      - postgres
+#      - redis
+#      - kafka
+#    environment:
+#      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/closet
+#      DATABASE_USERNAME: closet-user
+#      DATABASE_PASSWORD: closet_1234
+#      REDIS_HOST: redis
+#      REDIS_PORT: 6379
+#      JWT_SECRET: 376352270f35f8070b7a7e2ae299ca43
+#      BASEURL: http://localhost:3000
+#    expose:
+#      - 8080
+#    networks:
+#      - app-net
+
+  # =========================
+  # 📌 WS 서버 (Spring Boot 8081)
+  # =========================
+#  ws:
+#    build: service/sb05-closet-sse-ws/closet
+#    container_name: closet-ws
+#    depends_on:
+#      - postgres
+#      - redis
+#      - kafka
+#    environment:
+#      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/closet
+#      DATABASE_USERNAME: closet-user
+#      DATABASE_PASSWORD: closet_1234
+#      REDIS_HOST: redis
+#      REDIS_PORT: 6379
+#      JWT_SECRET: 376352270f35f8070b7a7e2ae299ca43
+#      # WS → API 호출 주소 (Docker 네트워크용)
+#      DM_API_BASE_URL: http://closet-api:8080
+#    expose:
+#      - 8081
+#    networks:
+#      - app-net
+
+  # =========================
+  # 📌 Nginx (Reverse Proxy)
+  # =========================
+  nginx:
+    build: service/sb05-closet-nginx
+    container_name: closet-nginx
+#    depends_on:
+#      - api
+#      - ws
+    ports:
+      - "3000:80"
+    networks:
+      - app-net
+
 networks:
   app-net:
 
