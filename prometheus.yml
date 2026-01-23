@@ -7,4 +7,4 @@ scrape_configs:
     static_configs:
       - targets: ["host.docker.internal:9101"]
       - targets: ["host.docker.internal:9102"]
-      #- targets: ["host.docker.internal:9103"]
+      - targets: ["host.docker.internal:9103"]
