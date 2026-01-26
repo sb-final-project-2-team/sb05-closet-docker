@@ -1,8 +1,6 @@
-version: "3.9"
-
 services:
   # =========================
-  # 📌 PostgreSQL
+  # 📌 PostgreSQL (API/WS)
   # =========================
   postgres:
     image: postgres:17
@@ -13,10 +11,16 @@ services:
       POSTGRES_PASSWORD: closet_1234
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d   # ✅ 추가 (DB 2개 생성용)
     ports:
       - "5432:5432"
     networks:
       - app-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U closet-user -d closet"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   # =========================
   # 📌 Redis
@@ -28,6 +32,11 @@ services:
       - "6379:6379"
     networks:
       - app-net
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   # =========================
   # 📌 Zookeeper (Kafka 의존)
@@ -56,95 +65,33 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+
+      # ✅ 로컬(호스트)에서 접속은 localhost:9092
+      # ✅ 컨테이너 내부 통신은 kafka:9093
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,INTERNAL://kafka:9093
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     networks:
       - app-net
 
   # =========================
-  # 📌 API 서버 (Spring Boot 8080)
+  # 📌 Elasticsearch
   # =========================
-#  api:
-#    build: service/sb05-closet-api/closet
-#    container_name: closet-api
-#    depends_on:
-#      - postgres
-#      - redis
-#      - kafka
-#    environment:
-#      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/closet
-#      DATABASE_USERNAME: closet-user
-#      DATABASE_PASSWORD: closet_1234
-#      REDIS_HOST: redis
-#      REDIS_PORT: 6379
-#      JWT_SECRET: 376352270f35f8070b7a7e2ae299ca43
-#      BASEURL: http://localhost:3000
-#    expose:
-#      - 8080
-#    networks:
-#      - app-net
-
-  # =========================
-  # 📌 WS 서버 (Spring Boot 8081)
-  # =========================
-#  ws:
-#    build: service/sb05-closet-sse-ws/closet
-#    container_name: closet-ws
-#    depends_on:
-#      - postgres
-#      - redis
-#      - kafka
-#    environment:
-#      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/closet
-#      DATABASE_USERNAME: closet-user
-#      DATABASE_PASSWORD: closet_1234
-#      REDIS_HOST: redis
-#      REDIS_PORT: 6379
-#      JWT_SECRET: 376352270f35f8070b7a7e2ae299ca43
-#      # WS → API 호출 주소 (Docker 네트워크용)
-#      DM_API_BASE_URL: http://closet-api:8080
-#    expose:
-#      - 8081
-#    networks:
-#      - app-net
-
-  # =========================
-  # 📌 Nginx (Reverse Proxy)
-  # =========================
-  nginx:
-    build: service/sb05-closet-nginx
-    container_name: closet-nginx
-#    depends_on:
-#      - api
-#      - ws
-    ports:
-      - "3000:80"
-    networks:
-      - app-net
-  prometheus:
-    image: prom/prometheus
-    container_name: prometheus
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-    ports:
-      - "9090:9090"
-
-  grafana:
-    image: grafana/grafana
-    container_name: grafana
-    ports:
-      - "3030:3000"
-    depends_on:
-      - prometheus
-
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:9.2.2
     container_name: elasticsearch_local
     command: >
-      bash -c "elasticsearch-plugin install analysis-nori --batch && 
-               /usr/local/bin/docker-entrypoint.sh"
+      bash -c "
+        if [ ! -d /usr/share/elasticsearch/plugins/analysis-nori ]; then
+          echo '-> Installing analysis-nori';
+          elasticsearch-plugin install analysis-nori --batch;
+        else
+          echo '-> analysis-nori already installed';
+        fi;
+        exec /usr/local/bin/docker-entrypoint.sh
+      "
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
@@ -155,25 +102,174 @@ services:
       - "9300:9300"
     volumes:
       - es-data:/usr/share/elasticsearch/data
+    networks:
+      - app-net
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:9200 >/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 30
 
+  # =========================
+  # 📌 Kibana
+  # =========================
   kibana:
     image: docker.elastic.co/kibana/kibana:9.2.2
     container_name: kibana_local
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - xpack.security.enabled=false
     ports:
       - "5601:5601"
     depends_on:
-      elasticsearch:
-        condition: service_healthy
+      - elasticsearch
+    networks:
+      - app-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:5601/api/status >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # =========================
+  # 📌 API 서버 (Spring Boot 8080)
+  # =========================
+  api:
+    build: service/sb05-closet-api/closet
+    container_name: closet-api
+    depends_on:
+      - postgres
+      - redis
+      - kafka
+      - elasticsearch
+    env_file:
+      - service/sb05-closet-api/closet/.env
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/closet
+      DATABASE_USERNAME: closet-user
+      DATABASE_PASSWORD: closet_1234
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9093
+
+      # ✅ ES는 서비스명으로
+      SPRING_ELASTICSEARCH_URIS: http://elasticsearch:9200
+
+      JWT_SECRET: 376352270f35f8070b7a7e2ae299ca43
+      BASEURL: http://localhost:3000
+    expose:
+      - "8080"
+      - "9101"
+    networks:
+      - app-net
+    restart: unless-stopped
+
+  # =========================
+  # 📌 WS 서버 (Spring Boot 8081)
+  # =========================
+  ws:
+    build: service/sb05-closet-sse-ws/closet
+    container_name: closet-ws
+    depends_on:
+      - postgres
+      - redis
+      - kafka
+      - api
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/closet
+      DATABASE_USERNAME: closet-user
+      DATABASE_PASSWORD: closet_1234
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9093
+      JWT_SECRET: 376352270f35f8070b7a7e2ae299ca43
+
+      # WS → API 호출 주소 (같은 네트워크이므로 서비스명 사용)
+      DM_API_BASE_URL: http://api:8080
+    expose:
+      - "8081"
+      - "9102"
+    networks:
+      - app-net
+    restart: unless-stopped
+
+  # =========================
+  # 📌 BATCH 서버 (Spring Boot 8082)
+  # =========================
+  batch:
+    build: service/sb05-closet-batch/closet
+    container_name: closet-batch
+    depends_on:
+      - postgres
+      - redis
+      - kafka
+      - elasticsearch
+    environment:
+      BATCH_DATASOURCE_URL: jdbc:postgresql://postgres:5432/closet-batch
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/closet
+      DATABASE_USERNAME: closet-user
+      DATABASE_PASSWORD: closet_1234
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9093
+      JWT_SECRET: 376352270f35f8070b7a7e2ae299ca43
+
+      # ✅ batch도 ES 쓰면 동일
+      SPRING_ELASTICSEARCH_URIS: http://elasticsearch:9200
+    expose:
+      - "8082"
+    networks:
+      - app-net
+    restart: unless-stopped
+
+  # =========================
+  # 📌 Nginx (Reverse Proxy)
+  # =========================
+  nginx:
+    build: service/sb05-closet-nginx
+    container_name: closet-nginx
+    depends_on:
+      - api
+      - ws
+    ports:
+      - "3000:80"
+    networks:
+      - app-net
+    restart: unless-stopped
+
+  # =========================
+  # 📌 Prometheus
+  # =========================
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - app-net
+    restart: unless-stopped
+
+  # =========================
+  # 📌 Grafana
+  # =========================
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    ports:
+      - "3030:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - app-net
+    restart: unless-stopped
 
 networks:
   app-net:
+    driver: bridge
 
 volumes:
   postgres-data:
